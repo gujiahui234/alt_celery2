@@ -1,0 +1,91 @@
+# alt_celery2 生产级部署编排
+#
+# 使用前请先配置环境变量：
+#   cp .env.example .env && 编辑 .env
+#
+# 说明：Redis-Stack 为外部已有服务（带密码），不在本编排内启动。
+
+x-app-env: &app-env
+  CELERY_BROKER_URL: ${CELERY_BROKER_URL:?请在 .env 中配置 CELERY_BROKER_URL}
+  CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:?请在 .env 中配置 CELERY_RESULT_BACKEND}
+  CELERY_LOG_LEVEL: ${CELERY_LOG_LEVEL:-INFO}
+  CELERY_TIMEZONE: ${CELERY_TIMEZONE:-Asia/Shanghai}
+
+services:
+  # ------------------------------------------------------------------
+  # Worker：执行普通任务与定时任务（可水平扩容：docker compose up -d --scale worker=2）
+  # ------------------------------------------------------------------
+  worker:
+    build: .
+    image: alt-celery2:latest
+    container_name: alt-celery2-worker
+    restart: unless-stopped
+    environment: *app-env
+    command:
+      - celery
+      - -A
+      - app.celery_app
+      - worker
+      - --loglevel=${CELERY_LOG_LEVEL:-INFO}
+      - --concurrency=${CELERY_WORKER_CONCURRENCY:-2}
+      - --max-tasks-per-child=1000
+    healthcheck:
+      # CMD-SHELL 形式经过 shell 执行，$HOSTNAME 可正确展开为容器主机名
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d celery@$$HOSTNAME"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ------------------------------------------------------------------
+  # Beat：定时任务调度器（注意：全集群只能运行一个实例）
+  # ------------------------------------------------------------------
+  beat:
+    build: .
+    image: alt-celery2:latest
+    container_name: alt-celery2-beat
+    restart: unless-stopped
+    environment: *app-env
+    command:
+      - celery
+      - -A
+      - app.celery_app
+      - beat
+      - --loglevel=${CELERY_LOG_LEVEL:-INFO}
+      - --pidfile=
+      - -s
+      - /tmp/celerybeat-schedule
+
+  # ------------------------------------------------------------------
+  # Flower：Celery 监控面板，默认 http://<host>:5555
+  # ------------------------------------------------------------------
+  flower:
+    build: .
+    image: alt-celery2:latest
+    container_name: alt-celery2-flower
+    restart: unless-stopped
+    ports:
+      - "${FLOWER_PORT:-5555}:5555"
+    environment:
+      <<: *app-env
+      FLOWER_BASIC_AUTH: ${FLOWER_BASIC_AUTH:-admin:admin}
+    command:
+      - celery
+      - -A
+      - app.celery_app
+      - flower
+      - --port=5555
+      - --basic-auth=${FLOWER_BASIC_AUTH:-admin:admin}
+
+  # ------------------------------------------------------------------
+  # run-tasks：一次性任务客户端（通过 profiles 按需运行，不随 up -d 启动）
+  #   docker compose run --rm run-tasks python run_tasks.py
+  # ------------------------------------------------------------------
+  run-tasks:
+    build: .
+    image: alt-celery2:latest
+    profiles: ["tools"]
+    environment: *app-env
+    command:
+      - python
+      - run_tasks.py
