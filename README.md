@@ -87,16 +87,76 @@ docker compose run --rm run-tasks python run_tasks.py beat
 
 ## 使用说明
 
-### run_tasks.py 命令一览
+### run_tasks.py 使用指南
+
+`run_tasks.py` 是独立的任务客户端脚本，用于验证部署与日常调试，无需编写代码即可完成三类操作：**运行示例任务**、**查询定时任务结果**、**查看 Worker 状态**。
+
+#### 前置条件
+
+- `worker` / `beat` 服务已启动（`docker compose ps` 确认）；
+- 客户端所在环境能访问 `.env` 中配置的 Redis-Stack。
+
+#### 运行方式
+
+**方式一：容器内运行（推荐，无需本地 Python 环境）**
 
 ```bash
-python run_tasks.py            # 默认：运行示例任务 + 查看定时任务结果 + 查看状态
-python run_tasks.py run        # 仅运行普通任务示例（tasks.add）
-python run_tasks.py beat       # 仅查询定时任务最近执行结果
-python run_tasks.py status     # 仅查看在线 Worker 及注册任务
+# 在部署服务器上直接执行（run-tasks 服务已在 docker-compose.yml 的 tools profile 中定义）
+docker compose run --rm run-tasks python run_tasks.py
+
+# 只运行某个子命令
+docker compose run --rm run-tasks python run_tasks.py run
+docker compose run --rm run-tasks python run_tasks.py beat
+docker compose run --rm run-tasks python run_tasks.py status
 ```
 
-> 本地直接运行 `run_tasks.py` 需要 Python >= 3.13 且网络可达 Redis-Stack；容器内运行则无需本地环境。
+**方式二：本地直接运行（开发调试）**
+
+```bash
+# 前提：Python >= 3.13，且本机能连通 Redis-Stack
+pip install -r requirements.txt          # 或 pip install -e .
+python run_tasks.py                      # 自动读取项目根目录 .env 中的连接配置
+```
+
+> 本地运行会自动加载根目录 `.env`（未设置的环境变量以它为准；已手动 `export` 的环境变量优先级更高）。  
+> 注意：若当前终端残留过错误的 `CELERY_*` 环境变量，请先 `unset`（Linux）或关闭窗口重开（Windows）再运行。
+
+#### 子命令一览
+
+| 命令 | 作用 | 说明 |
+|------|------|------|
+| *(默认 / `all`)* | 依次执行以下全部操作 | `python run_tasks.py` 不带参数 |
+| `run` | 运行普通任务示例 | 提交两组 `tasks.add` 异步计算并阻塞取回结果，验证 提交→队列→执行→取回 完整链路 |
+| `beat` | 查询定时任务最近结果 | 从 Redis 读取 `alt_celery2:beat:results` 列表，展示最近 10 条心跳/报告记录 |
+| `status` | 查看 Worker 状态 | 通过 Celery inspect 显示在线 Worker（pong 响应）及其注册的全部任务名 |
+| `--help` | 显示帮助 | 查看支持的子命令 |
+
+#### 输出示例
+
+```text
+$ docker compose run --rm run-tasks python run_tasks.py
+[普通任务] 已提交 tasks.add(3, 5)，task_id=93dab9ea-83d4-4e43-852a-11ba03d03bb6
+[普通任务] tasks.add(3, 5) = 8
+[普通任务] 已提交 tasks.add(10.5, 20.25)，task_id=51baa6ad-a4a1-4f3b-a261-221c7b0a0e25
+[普通任务] tasks.add(10.5, 20.25) = 30.75
+[定时任务] 最近 2 条结果：
+  - 任务: tasks.tick | 时间: 2026-09-03T12:03:36.114628+00:00 | message: Heartbeat OK | task_id: 2fdf8e4d-...
+[状态] 在线 Worker 数量: 1
+  - celery@6f3c58531b7d: {'ok': 'pong'}
+[状态] celery@6f3c58531b7d 已注册 3 个任务：
+    * tasks.add
+    * tasks.daily_report
+    * tasks.tick
+```
+
+#### 常见问题
+
+| 现象 | 原因与处理 |
+|------|-----------|
+| `[定时任务] 暂无结果` | Beat 尚未触发（心跳间隔 30 秒）。确认 `beat` 容器在运行：`docker compose ps`，稍等片刻重试 |
+| `[状态] 没有在线的 Worker` | `worker` 容器未启动或正在重启，查看日志：`docker compose logs worker` |
+| 提交后长时间无结果 | Redis 连接不通（检查 `.env` 与网络可达性），或 Worker 未运行 |
+| 容器内运行报连接错误 | `docker compose run` 会继承 compose 的环境变量，无需手动设置；检查 `.env` 是否配置正确 |
 
 ### 在自己的代码中调用任务（生产者示例）
 
