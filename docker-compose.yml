@@ -11,12 +11,18 @@ x-app-env: &app-env
   CELERY_LOG_LEVEL: ${CELERY_LOG_LEVEL:-INFO}
   CELERY_TIMEZONE: ${CELERY_TIMEZONE:-Asia/Shanghai}
 
+# 构建参数（PyPI 源可在 .env 中通过 PIP_INDEX_URL 覆盖，国内推荐清华源）
+x-build: &build
+  context: .
+  args:
+    PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+
 services:
   # ------------------------------------------------------------------
   # Worker：执行普通任务与定时任务（可水平扩容：docker compose up -d --scale worker=2）
   # ------------------------------------------------------------------
   worker:
-    build: .
+    build: *build
     image: alt-celery2:latest
     container_name: alt-celery2-worker
     restart: unless-stopped
@@ -41,7 +47,7 @@ services:
   # Beat：定时任务调度器（注意：全集群只能运行一个实例）
   # ------------------------------------------------------------------
   beat:
-    build: .
+    build: *build
     image: alt-celery2:latest
     container_name: alt-celery2-beat
     restart: unless-stopped
@@ -60,7 +66,7 @@ services:
   # Flower：Celery 监控面板，默认 http://<host>:5555
   # ------------------------------------------------------------------
   flower:
-    build: .
+    build: *build
     image: alt-celery2:latest
     container_name: alt-celery2-flower
     restart: unless-stopped
@@ -82,7 +88,7 @@ services:
   #   docker compose run --rm run-tasks python run_tasks.py
   # ------------------------------------------------------------------
   run-tasks:
-    build: .
+    build: *build
     image: alt-celery2:latest
     profiles: ["tools"]
     environment: *app-env
